@@ -5,6 +5,7 @@ import { createReadStream, createWriteStream } from 'fs'
 import { pipeline } from 'stream/promises'
 import { Transform } from 'stream'
 import fs from 'fs'
+import cloudinary from 'cloudinary'
 
 const normalizeKeys = (obj) => {
   const normalizedObj = {}
@@ -58,7 +59,7 @@ const handleCsvUpload = async (file) => {
   })
 }
 
-const handleFileUpload = async (file) => {
+const handleFileDownload = async (file) => {
   const filename = file.filename
   try {
     if (filename.endsWith('.xlsx')) {
@@ -81,7 +82,22 @@ const handleFileUpload = async (file) => {
   }
 }
 
-export { handleFileUpload }
+const FileDownload = async (fileUrl) => {
+  try {
+    // Use the Cloudinary SDK to fetch the file from the provided URL
+    const response = await cloudinary.v2.api.resource(fileUrl, {
+      resource_type: 'raw',
+    })
+
+    // Return the file data
+    return response
+  } catch (error) {
+    console.log('Error retrieving the file from Cloudinary:', error)
+    throw new Error('Server error')
+  }
+}
+
+export { handleFileDownload, FileDownload }
 
 // const handleCsvUpload = async (file) => {
 //   const fileStream = createReadStream(file.path)

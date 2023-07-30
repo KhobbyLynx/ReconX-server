@@ -3,29 +3,49 @@ import asyncHandler from 'express-async-handler'
 import { createReadStream, createWriteStream } from 'fs'
 import { pipeline } from 'stream/promises'
 import { Transform } from 'stream'
-import util from 'util'
-import { v2 as cloudinary } from 'cloudinary'
 import csvtojson from 'csvtojson'
-import axios from 'axios'
-import { handleFileUpload } from '../config/fileProcessor.js'
+import { FileDownload, handleFileDownload } from '../config/fileProcessor.js'
+import cloudinary from 'cloudinary'
 
 export const createAccount = asyncHandler(async (req, res) => {
   try {
     const { name, number, bank, branch } = req.body
 
     const file = req.file
+    const filePath = req.file.path
     console.log('<<<<<<<<FILE>>>>>>>>', file)
 
-    const jsonData = await handleFileUpload(file)
+    const fileUrl = await new Promise((resolve, reject) => {
+      // Upload the file to Cloudinary
+      const cloudinaryFolder = 'reconx'
+      cloudinary.uploader.upload(
+        filePath,
+        { resource_type: 'raw', folder: cloudinaryFolder },
+        (error, result) => {
+          if (error) {
+            console.error('Error uploading to Cloudinary:', error)
+            return reject(error)
+          }
 
-    console.log('<<<<<<<<JSON DATA>>>>>>>>', jsonData)
+          // Remove the temporary file from the server
+          fs.unlinkSync(filePath)
+
+          // The file URL in Cloudinary will be available in result.secure_url
+          const fileUrl = result.secure_url
+          console.log('File uploaded to Cloudinary:', fileUrl)
+          resolve(fileUrl)
+        }
+      )
+    })
+
+    console.log('<<<<<<<<JSON DATA>>>>>>>>', fileUrl)
 
     const newBankAccount = {
       name,
       number,
       bank,
       branch,
-      file: jsonData,
+      fileUrl,
     }
 
     const account = await Account.create(newBankAccount)
@@ -90,36 +110,40 @@ export const singleAccount = asyncHandler(async (req, res) => {
       '-reconciled'
     )
 
-    if (!account) {
+    // Check if the account exists and has a file associated with it
+    if (!account || !account.fileUrl) {
       res.status(404)
-      return new Error('Account not found')
+      return new Error('error: Account not found or file URL not provided')
     }
-    const { _id, name, number, bank, branch, file } = account
+    const { _id, name, number, bank, branch, fileUrl } = account
 
-    const filePath = file.path
+    const fileData = await FileDownload(fileUrl)
 
-    const dataProcessor = Transform({
-      objectMode: true,
-      transform(chunk, enc, callback) {
-        const jsonData = chunk.toString()
-        const data = JSON.parse(jsonData)
+    console.log('<<<<JSON Data>>>>>>>', fileData)
+    // const jsonData = await handleFileDownload(fileData)
 
-        return callback(null, JSON.stringify(data))
-      },
-    })
+    // const dataProcessor = Transform({
+    //   objectMode: true,
+    //   transform(chunk, enc, callback) {
+    //     const jsonData = chunk.toString()
+    //     const data = JSON.parse(jsonData)
 
-    const processData = await pipeline(
-      createReadStream(filePath),
-      csvtojson(),
-      dataProcessor,
-      async function* (source) {
-        for await (const data of source) {
-          return data
-        }
-      }
-    )
+    //     return callback(null, JSON.stringify(data))
+    //   },
+    // })
 
-    console.log('<<<<Processed Data>>>>>>>', processData)
+    // const processData = await pipeline(
+    //   createReadStream(filePath),
+    //   csvtojson(),
+    //   dataProcessor,
+    //   async function* (source) {
+    //     for await (const data of source) {
+    //       return data
+    //     }
+    //   }
+    // )
+
+    // console.log('<<<<JSON Data>>>>>>>', jsonData)
     // const accountData = {
     //   _id,
     //   name,
