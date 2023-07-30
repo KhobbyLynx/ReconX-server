@@ -1,5 +1,129 @@
 import xlsx from 'xlsx'
 import csvtojson from 'csvtojson'
+import csvParser from 'csv-parser'
+import { createReadStream, createWriteStream } from 'fs'
+import { pipeline } from 'stream/promises'
+import { Transform } from 'stream'
+import fs from 'fs'
+
+const normalizeKeys = (obj) => {
+  const normalizedObj = {}
+  for (const key in obj) {
+    if (obj.hasOwnProperty(key)) {
+      const normalizedKey = key.toUpperCase()
+      normalizedObj[normalizedKey] = obj[key]
+    }
+  }
+  return normalizedObj
+}
+
+const handleXlsxUpload = (file) => {
+  const filePath = file.path
+
+  try {
+    const jsonData = []
+    const workbook = xlsx.readFile(filePath)
+    const sheetNames = workbook.SheetNames
+
+    for (const sheetName of sheetNames) {
+      const sheet = workbook.Sheets[sheetName]
+      const sheetData = xlsx.utils.sheet_to_json(sheet, { raw: true })
+      jsonData.push(...sheetData)
+    }
+
+    return jsonData
+  } catch (error) {
+    console.log('Could not process XLSX:', error)
+    throw new Error('Could not process XLSX')
+  }
+}
+// Function to handle the file upload and conversion to JSON for CSV files
+const handleCsvUpload = async (file) => {
+  const filename = file.filename
+
+  return new Promise((resolve, reject) => {
+    const jsonData = []
+
+    fs.createReadStream(file.path)
+      .pipe(csvParser())
+      .on('data', (data) => {
+        jsonData.push(data)
+      })
+      .on('end', () => {
+        resolve(jsonData)
+      })
+      .on('error', (error) => {
+        reject(error)
+      })
+  })
+}
+
+const handleFileUpload = async (file) => {
+  const filename = file.filename
+  try {
+    if (filename.endsWith('.xlsx')) {
+      // Process Excel .xlsx file
+      const jsonData = await handleXlsxUpload(file)
+      return jsonData
+    } else if (filename.endsWith('.csv')) {
+      // Process CSV file
+      const jsonData = await handleCsvUpload(file)
+      return jsonData
+    } else {
+      // Invalid file format
+      throw new Error(
+        'Invalid file format. Please upload an Excel (.xlsx) or CSV file.'
+      )
+    }
+  } catch (error) {
+    console.log(error)
+    throw new Error('Server error')
+  }
+}
+
+export { handleFileUpload }
+
+// const handleCsvUpload = async (file) => {
+//   const fileStream = createReadStream(file.path)
+//   const filename = file.filename
+//   const jsonData = []
+
+//   try {
+//     await pipeline(
+//       fileStream,
+//       csvParser(),
+//       new Transform({
+//         objectMode: true,
+//         transform(chunk, encoding, callback) {
+//           jsonData.push(chunk)
+//           callback()
+//         },
+//         flush(callback) {
+//           // Pass the jsonData to the next stream in the pipeline
+//           this.push(jsonData)
+//           callback()
+//         },
+//       })
+//     )
+
+//     return jsonData
+//   } catch (error) {
+//     console.log('Error Processing the CSV file', error)
+//     throw new Error('Server error')
+//   }
+// }
+// Function to handle the file upload and conversion to JSON
+
+// const dataProcessor = Transform({
+//   objectMode: true,
+//   transform(chunk, enc, callback) {
+//     const jsonData = chunk.toString()
+//     const data = JSON.parse(jsonData)
+
+//     return callback(null, JSON.stringify(data))
+//     // return callback(null, JSON.stringify(data))
+//   },
+// })
 
 // function processObjects(fileArray) {
 //   let currentDate = null
@@ -49,39 +173,6 @@ import csvtojson from 'csvtojson'
 //   return excelBuffer
 // }
 
-const normalizeKeys = (obj) => {
-  const normalizedObj = {}
-  for (const key in obj) {
-    if (obj.hasOwnProperty(key)) {
-      const normalizedKey = key.toUpperCase()
-      normalizedObj[normalizedKey] = obj[key]
-    }
-  }
-  return normalizedObj
-}
-
-const handleXlsxUpload = (dataFile) => {
-  const workbook = xlsx.read(dataFile.data, { cellDates: true })
-  const sheetName = workbook.SheetNames[0]
-  const sheet = workbook.Sheets[sheetName]
-  const jsonData = xlsx.utils.sheet_to_json(sheet)
-  // const excelBuffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' })
-  // console.log('=========JSON', json)
-  // const jsonData = processObjects(json)
-  console.log('===============JSONFORMATED', jsonData)
-  return excelBuffer
-}
-
-// Function to handle the file upload and conversion to JSON for CSV files
-const handleCsvUpload = async (dataFile) => {
-  try {
-    const jsonData = await csvtojson().fromFile(`uploads/${dataFile.name}`)
-    return jsonData
-  } catch (error) {
-    throw new Error('Server error')
-  }
-}
-
 // //function to parse csv file
 // export const parseCsvFile = (filePath) => {
 //   return new Promise((resolve, reject) => {
@@ -103,37 +194,11 @@ const handleCsvUpload = async (dataFile) => {
 //   })
 // }
 
-async function convertExcelToJSON(bufferData) {
-  const workbook = xlsx.read(bufferData, { type: 'buffer' })
-  const sheetName = workbook.SheetNames[0]
-  const jsonData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], {
-    header: 'A',
-  })
-  return jsonData
-}
-
-// Function to handle the file upload and conversion to JSON
-const handleFileUpload = async (dataFile) => {
-  try {
-    if (dataFile.name.endsWith('.xlsx')) {
-      // Process Excel .xlsx file
-      const jsonData = await handleXlsxUpload(dataFile)
-      return jsonData
-    } else if (dataFile.name.endsWith('.csv')) {
-      // Process CSV file
-      const jsonData = await handleCsvUpload(dataFile)
-      return jsonData
-    } else {
-      // Invalid file format
-      res.status(400)
-      throw new Error(
-        'Invalid file format. Please upload an Excel (.xlsx) or CSV file.'
-      )
-    }
-  } catch (error) {
-    res.status(500)
-    throw new Error('Server error')
-  }
-}
-
-export { handleFileUpload, convertExcelToJSON }
+// async function convertExcelToJSON(bufferData) {
+//   const workbook = xlsx.read(bufferData, { type: 'buffer' })
+//   const sheetName = workbook.SheetNames[0]
+//   const jsonData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], {
+//     header: 'A',
+//   })
+//   return jsonData
+// }

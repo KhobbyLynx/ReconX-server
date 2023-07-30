@@ -15,8 +15,8 @@ const accountSchema = new Schema(
     branch: {
       type: String,
     },
-    filePathUrl: {
-      type: String,
+    file: {
+      type: JSON,
     },
     reconciled: {
       type: Boolean,

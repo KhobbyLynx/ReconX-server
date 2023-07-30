@@ -2,45 +2,30 @@ import Account from '../models/account.model.js'
 import asyncHandler from 'express-async-handler'
 import { createReadStream, createWriteStream } from 'fs'
 import { pipeline } from 'stream/promises'
+import { Transform } from 'stream'
 import util from 'util'
 import { v2 as cloudinary } from 'cloudinary'
+import csvtojson from 'csvtojson'
+import axios from 'axios'
+import { handleFileUpload } from '../config/fileProcessor.js'
 
 export const createAccount = asyncHandler(async (req, res) => {
   try {
     const { name, number, bank, branch } = req.body
 
-    const filePath = req.file.path
-    console.log('<<<<<<<<FILE>>>>>>>>', filePath)
+    const file = req.file
+    console.log('<<<<<<<<FILE>>>>>>>>', file)
 
-    const filePathUrl = await new Promise((resolve, reject) => {
-      // Upload the file to Cloudinary
-      const cloudinaryFolder = 'reconx'
-      cloudinary.uploader.upload(
-        filePath,
-        { resource_type: 'raw', folder: cloudinaryFolder },
-        (error, result) => {
-          if (error) {
-            console.error('Error uploading to Cloudinary:', error)
-            return reject(error)
-          }
+    const jsonData = await handleFileUpload(file)
 
-          // Remove the temporary file from the server
-          fs.unlinkSync(filePath)
-
-          // The file URL in Cloudinary will be available in result.secure_url
-          const fileUrl = result.secure_url
-          console.log('File uploaded to Cloudinary:', fileUrl)
-          resolve(fileUrl)
-        }
-      )
-    })
+    console.log('<<<<<<<<JSON DATA>>>>>>>>', jsonData)
 
     const newBankAccount = {
       name,
       number,
       bank,
       branch,
-      filePathUrl,
+      file: jsonData,
     }
 
     const account = await Account.create(newBankAccount)
@@ -111,6 +96,30 @@ export const singleAccount = asyncHandler(async (req, res) => {
     }
     const { _id, name, number, bank, branch, file } = account
 
+    const filePath = file.path
+
+    const dataProcessor = Transform({
+      objectMode: true,
+      transform(chunk, enc, callback) {
+        const jsonData = chunk.toString()
+        const data = JSON.parse(jsonData)
+
+        return callback(null, JSON.stringify(data))
+      },
+    })
+
+    const processData = await pipeline(
+      createReadStream(filePath),
+      csvtojson(),
+      dataProcessor,
+      async function* (source) {
+        for await (const data of source) {
+          return data
+        }
+      }
+    )
+
+    console.log('<<<<Processed Data>>>>>>>', processData)
     // const accountData = {
     //   _id,
     //   name,
