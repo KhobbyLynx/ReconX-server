@@ -42,6 +42,13 @@ import csvtojson from 'csvtojson'
 
 // Function to handle the file upload and conversion to JSON for Excel files
 
+// Function to read Excel file and convert to buffer
+// function readExcelToBuffer(file) {
+//   const workbook = xlsx.readFile(file)
+//   const excelBuffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' })
+//   return excelBuffer
+// }
+
 const normalizeKeys = (obj) => {
   const normalizedObj = {}
   for (const key in obj) {
@@ -58,10 +65,11 @@ const handleXlsxUpload = (dataFile) => {
   const sheetName = workbook.SheetNames[0]
   const sheet = workbook.Sheets[sheetName]
   const jsonData = xlsx.utils.sheet_to_json(sheet)
+  // const excelBuffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' })
   // console.log('=========JSON', json)
   // const jsonData = processObjects(json)
   console.log('===============JSONFORMATED', jsonData)
-  return jsonData
+  return excelBuffer
 }
 
 // Function to handle the file upload and conversion to JSON for CSV files
@@ -72,6 +80,36 @@ const handleCsvUpload = async (dataFile) => {
   } catch (error) {
     throw new Error('Server error')
   }
+}
+
+// //function to parse csv file
+// export const parseCsvFile = (filePath) => {
+//   return new Promise((resolve, reject) => {
+//     const fileData = []
+
+//     fs.createReadStream(filePath)
+//       .pipe(csvParser())
+//       .on('data', (data) => {
+//         // Normalize the keys to lowercase and store the row data in the array
+//         const normalizedRowData = normalizeKeys(data)
+//         fileData.push(normalizedRowData)
+//       })
+//       .on('end', () => {
+//         resolve(fileData)
+//       })
+//       .on('error', (error) => {
+//         reject(error)
+//       })
+//   })
+// }
+
+async function convertExcelToJSON(bufferData) {
+  const workbook = xlsx.read(bufferData, { type: 'buffer' })
+  const sheetName = workbook.SheetNames[0]
+  const jsonData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], {
+    header: 'A',
+  })
+  return jsonData
 }
 
 // Function to handle the file upload and conversion to JSON
@@ -98,4 +136,4 @@ const handleFileUpload = async (dataFile) => {
   }
 }
 
-export { handleFileUpload }
+export { handleFileUpload, convertExcelToJSON }

@@ -8,9 +8,16 @@ import reconcileRoute from './routes/reconcile.route.js'
 import cors from 'cors'
 import { errorHandler } from './middlewares/error.middleware.js'
 import { multerMiddleware } from './middlewares/multer.js'
+import { v2 as cloudinary } from 'cloudinary'
 
 const port = process.env.PORT || 5000
 const app = express()
+
+cloudinary.config({
+  cloud_name: 'khobbylynx',
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+})
 
 app.use(bodyParser.json())
 app.use(bodyParser.urlencoded({ extended: true }))

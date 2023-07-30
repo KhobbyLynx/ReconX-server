@@ -1,61 +1,59 @@
 import Account from '../models/account.model.js'
 import asyncHandler from 'express-async-handler'
-import {
-  concatenateObjects,
-  convertArrayToBuffer,
-  convertBufferToArray,
-  parseFile,
-} from '../config/fileProcessorFunctions.js'
+import { createReadStream, createWriteStream } from 'fs'
+import { pipeline } from 'stream/promises'
+import util from 'util'
+import { v2 as cloudinary } from 'cloudinary'
 
-export const createAccount = asyncHandler(async (req, res, next) => {
+export const createAccount = asyncHandler(async (req, res) => {
   try {
     const { name, number, bank, branch } = req.body
 
-    const file = req.file
-    console.log('<<<<<<<<FILE>>>>>>>>', file)
-    // Parse the file asynchronously using await
-    const fileData = await parseFile(file)
+    const filePath = req.file.path
+    console.log('<<<<<<<<FILE>>>>>>>>', filePath)
 
-    // Create an array of objects with only the necessary fields for each transaction
-    // const transactions = fileData.map((transaction) => ({
-    //   'POST DATE': transaction[0],
-    //   PARTICULARS: transaction['PARTICULARS'],
-    //   REFERENCE: transaction['REFERENCE'],
-    //   'VALUE DATE': transaction['VALUE DATE'],
-    //   'DEBIT AMOUNT': transaction['DEBIT AMOUNT'],
-    //   'CREDIT AMOUNT': transaction['CREDIT AMOUNT'],
-    //   BALANCE: transaction['BALANCE'],
-    // }))
-    // const concatenatedTransactions = concatenateObjects(fileData)
+    const filePathUrl = await new Promise((resolve, reject) => {
+      // Upload the file to Cloudinary
+      const cloudinaryFolder = 'reconx'
+      cloudinary.uploader.upload(
+        filePath,
+        { resource_type: 'raw', folder: cloudinaryFolder },
+        (error, result) => {
+          if (error) {
+            console.error('Error uploading to Cloudinary:', error)
+            return reject(error)
+          }
 
-    // const bufferData = convertArrayToBuffer(fileData)
+          // Remove the temporary file from the server
+          fs.unlinkSync(filePath)
 
-    console.log('========')
-    // console.log(transactions)
-    console.log('========')
+          // The file URL in Cloudinary will be available in result.secure_url
+          const fileUrl = result.secure_url
+          console.log('File uploaded to Cloudinary:', fileUrl)
+          resolve(fileUrl)
+        }
+      )
+    })
 
     const newBankAccount = {
       name,
       number,
       bank,
       branch,
-      reconciled: false,
-      file: fileData,
+      filePathUrl,
     }
 
-    //Save the new account to the database
     const account = await Account.create(newBankAccount)
-    console.log(newBankAccount, '=====ACCOUNT CREATED FETCHED SUCCESSFULLY')
     res.status(200).send(account)
   } catch (error) {
     console.log(error)
-    return new Error(error.message)
+    return res.status(500).json({ error: error.message })
   }
 })
 
 export const getAccounts = asyncHandler(async (req, res) => {
   try {
-    const accounts = await Account.find().select('-file')
+    const accounts = await Account.find().select('-file -reconciled')
     res.status(200).json(accounts)
   } catch (error) {
     console.error('Error fetching accounts:', error)
@@ -63,73 +61,24 @@ export const getAccounts = asyncHandler(async (req, res) => {
   }
 })
 
-export const singleAccount = asyncHandler(async (req, res) => {
-  try {
-    const { accountId } = req.query
-    console.log('>>>>QUERY<<<<<<', req.query)
-    const account = await Account.findById({ _id: accountId })
-
-    if (!account) {
-      res.status(404).json({ error: 'Account not found' })
-      return
-    }
-
-    const { _id, name, number, bank, branch, reconciled, file } = account
-
-    // Parse the buffer data from MongoDB into an array
-    const arrayData = JSON.parse(file.toString())
-
-    const pageNumber = parseInt(req.query.pageNumber) || 1
-    const pageSize = parseInt(req.query.pageSize) || 10
-
-    const startIndex = (pageNumber - 1) * pageSize
-    const endIndex = startIndex + pageSize
-    const arrayChunk = arrayData.slice(startIndex, endIndex)
-
-    const accountData = {
-      _id,
-      name,
-      number,
-      bank,
-      branch,
-      reconciled,
-      file: arrayChunk,
-      totalPages: Math.ceil(arrayData.length / pageSize),
-    }
-
-    console.log('>>>>ACCOUNTDATA<<<<<<', accountData)
-    res.status(200).json(accountData)
-  } catch (error) {
-    console.error('Error fetching account:', error)
-    res.status(500).json({ error: 'Error fetching account' })
-  }
-})
-
 // export const singleAccount = asyncHandler(async (req, res) => {
 //   try {
-//     const accountId = req.params.id
+//     const { accountId } = req.query
+//     console.log('>>>>QUERY<<<<<<', req.query)
 //     const account = await Account.findById({ _id: accountId })
-
 //     if (!account) {
-//       res.status(404)
-//       return new Error('Account not found')
+//       res.status(404).json({ error: 'Account not found' })
+//       return
 //     }
-
 //     const { _id, name, number, bank, branch, reconciled, file } = account
-
-//     const bufferData = file
-//     const arrayData = convertBufferToArray(bufferData)
-//     console.log(
-//       `=====OKKKKK WITH ${(file, '=====', arrayData)} OK SUCCESSFULLY=====`
-//     )
-//     Array.from({ length: 100 }, (_, index) => `Item ${index + 1}`)
+//     // Parse the buffer data from MongoDB into an array
+//     const arrayData = JSON.parse(file.data.toString())
+//     // const arrayData = handleFileUpload(file)
 //     const pageNumber = parseInt(req.query.pageNumber) || 1
 //     const pageSize = parseInt(req.query.pageSize) || 10
-
 //     const startIndex = (pageNumber - 1) * pageSize
 //     const endIndex = startIndex + pageSize
-//     const arrayChunk = arrayData?.slice(startIndex, endIndex)
-
+//     const arrayChunk = arrayData.slice(startIndex, endIndex)
 //     const accountData = {
 //       _id,
 //       name,
@@ -138,14 +87,47 @@ export const singleAccount = asyncHandler(async (req, res) => {
 //       branch,
 //       reconciled,
 //       file: arrayChunk,
+//       totalTransactions: file.length,
 //       totalPages: Math.ceil(arrayData.length / pageSize),
 //     }
-//     console.log(`=====ACCOUNT WITH ${accountData} FETCHED SUCCESSFULLY=====`)
+//     console.log('>>>>ACCOUNTDATA<<<<<<', accountData)
 //     res.status(200).json(accountData)
 //   } catch (error) {
-//     console.log(error)
+//     console.error('Error fetching account:', error)
+//     res.status(500).json({ error: 'Error fetching account' })
 //   }
 // })
+
+export const singleAccount = asyncHandler(async (req, res) => {
+  try {
+    const accountId = req.params.id
+    const account = await Account.findById({ _id: accountId }).select(
+      '-reconciled'
+    )
+
+    if (!account) {
+      res.status(404)
+      return new Error('Account not found')
+    }
+    const { _id, name, number, bank, branch, file } = account
+
+    // const accountData = {
+    //   _id,
+    //   name,
+    //   number,
+    //   bank,
+    //   branch,
+    //   reconciled,
+    //   fileData,
+    //   // file: arrayData,
+    //   // totalPages: Math.ceil(arrayData.length / pageSize),
+    // }
+    // console.log(`=====ACCOUNT WITH ${arrayData} FETCHED SUCCESSFULLY=====`)
+    res.status(200).json({ message: 'DONE' })
+  } catch (error) {
+    console.log(error)
+  }
+})
 
 export const deleteAccount = asyncHandler(async (req, res) => {
   const { accountIds } = req.body

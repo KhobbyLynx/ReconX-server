@@ -15,11 +15,12 @@ const accountSchema = new Schema(
     branch: {
       type: String,
     },
-    file: {
-      type: Buffer,
+    filePathUrl: {
+      type: String,
     },
     reconciled: {
       type: Boolean,
+      default: false,
     },
   },
   {
