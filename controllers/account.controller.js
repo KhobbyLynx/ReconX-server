@@ -1,19 +1,15 @@
 import Account from '../models/account.model.js'
 import asyncHandler from 'express-async-handler'
-import { createReadStream, createWriteStream } from 'fs'
-import { pipeline } from 'stream/promises'
-import { Transform } from 'stream'
-import csvtojson from 'csvtojson'
 import { FileDownload, handleFileDownload } from '../config/fileProcessor.js'
-import cloudinary from 'cloudinary'
+import fs from 'fs'
+import { v2 as cloudinary } from 'cloudinary'
+import memoryCache from 'memory-cache'
 
 export const createAccount = asyncHandler(async (req, res) => {
   try {
     const { name, number, bank, branch } = req.body
 
-    const file = req.file
     const filePath = req.file.path
-    console.log('<<<<<<<<FILE>>>>>>>>', file)
 
     const fileUrl = await new Promise((resolve, reject) => {
       // Upload the file to Cloudinary
@@ -58,7 +54,7 @@ export const createAccount = asyncHandler(async (req, res) => {
 
 export const getAccounts = asyncHandler(async (req, res) => {
   try {
-    const accounts = await Account.find().select('-file -reconciled')
+    const accounts = await Account.find().select('-fileUrl')
     res.status(200).json(accounts)
   } catch (error) {
     console.error('Error fetching accounts:', error)
@@ -66,46 +62,22 @@ export const getAccounts = asyncHandler(async (req, res) => {
   }
 })
 
-// export const singleAccount = asyncHandler(async (req, res) => {
-//   try {
-//     const { accountId } = req.query
-//     console.log('>>>>QUERY<<<<<<', req.query)
-//     const account = await Account.findById({ _id: accountId })
-//     if (!account) {
-//       res.status(404).json({ error: 'Account not found' })
-//       return
-//     }
-//     const { _id, name, number, bank, branch, reconciled, file } = account
-//     // Parse the buffer data from MongoDB into an array
-//     const arrayData = JSON.parse(file.data.toString())
-//     // const arrayData = handleFileUpload(file)
-//     const pageNumber = parseInt(req.query.pageNumber) || 1
-//     const pageSize = parseInt(req.query.pageSize) || 10
-//     const startIndex = (pageNumber - 1) * pageSize
-//     const endIndex = startIndex + pageSize
-//     const arrayChunk = arrayData.slice(startIndex, endIndex)
-//     const accountData = {
-//       _id,
-//       name,
-//       number,
-//       bank,
-//       branch,
-//       reconciled,
-//       file: arrayChunk,
-//       totalTransactions: file.length,
-//       totalPages: Math.ceil(arrayData.length / pageSize),
-//     }
-//     console.log('>>>>ACCOUNTDATA<<<<<<', accountData)
-//     res.status(200).json(accountData)
-//   } catch (error) {
-//     console.error('Error fetching account:', error)
-//     res.status(500).json({ error: 'Error fetching account' })
-//   }
-// })
-
 export const singleAccount = asyncHandler(async (req, res) => {
   try {
     const accountId = req.params.id
+    const page = parseInt(req.query.page) || 1 // Get the requested page from the query parameters
+    const pageSize = 20 // Number of items per page
+
+    // Check if the paginated data is already in the cache
+    const cacheKey = `accountData_${accountId}_${page}`
+    const cachedData = memoryCache.get(cacheKey)
+
+    if (cachedData) {
+      console.log('=====ACCOUNT DATA FETCHED FROM CACHE=====', cachedData)
+      return res.status(200).send(cachedData) // Return the cached data and stop further execution
+    }
+
+    // If not in cache, fetch the data from the database
     const account = await Account.findById({ _id: accountId }).select(
       '-reconciled'
     )
@@ -113,52 +85,50 @@ export const singleAccount = asyncHandler(async (req, res) => {
     // Check if the account exists and has a file associated with it
     if (!account || !account.fileUrl) {
       res.status(404)
-      return new Error('error: Account not found or file URL not provided')
+      throw new Error('Account not found or file URL not provided')
     }
+
     const { _id, name, number, bank, branch, fileUrl } = account
 
-    const fileData = await FileDownload(fileUrl)
+    console.log('<<<<FileUrl>>>>>>>', fileUrl)
 
-    console.log('<<<<JSON Data>>>>>>>', fileData)
-    // const jsonData = await handleFileDownload(fileData)
+    const fileBuffer = await FileDownload(fileUrl)
 
-    // const dataProcessor = Transform({
-    //   objectMode: true,
-    //   transform(chunk, enc, callback) {
-    //     const jsonData = chunk.toString()
-    //     const data = JSON.parse(jsonData)
+    const processedData = await handleFileDownload(fileBuffer, fileUrl)
+    const { jsonData, totalCreditAmount, totalDebitAmount, dateRange } =
+      processedData
+    console.log('<<<<File Data>>>>>>>', jsonData)
 
-    //     return callback(null, JSON.stringify(data))
-    //   },
-    // })
+    // Calculate the start and end index of the current page's data
+    const startIndex = (page - 1) * pageSize
+    const endIndex = startIndex + pageSize
 
-    // const processData = await pipeline(
-    //   createReadStream(filePath),
-    //   csvtojson(),
-    //   dataProcessor,
-    //   async function* (source) {
-    //     for await (const data of source) {
-    //       return data
-    //     }
-    //   }
-    // )
+    // Slice the jsonData to get the paginated chunk
+    const paginatedData = jsonData.slice(startIndex, endIndex)
 
-    // console.log('<<<<JSON Data>>>>>>>', jsonData)
-    // const accountData = {
-    //   _id,
-    //   name,
-    //   number,
-    //   bank,
-    //   branch,
-    //   reconciled,
-    //   fileData,
-    //   // file: arrayData,
-    //   // totalPages: Math.ceil(arrayData.length / pageSize),
-    // }
-    // console.log(`=====ACCOUNT WITH ${arrayData} FETCHED SUCCESSFULLY=====`)
-    res.status(200).json({ message: 'DONE' })
+    const arrayData = {
+      _id,
+      name,
+      number,
+      bank,
+      branch,
+      jsonData: paginatedData, // Send the paginated chunk instead of the whole jsonData
+      totalItems: jsonData.length, // Total count of items in the JSON data
+      totalDebitAmount, // Total sum of debit amounts
+      totalCreditAmount, // Total sum of credit amounts
+      dateRange,
+    }
+
+    console.log(`=====ACCOUNT WITH ${arrayData} FETCHED SUCCESSFULLY=====`)
+
+    // Store the paginated data in the cache
+    const cacheDuration = 60 * 60 * 1000 // 1 hour
+    memoryCache.put(cacheKey, arrayData, cacheDuration)
+
+    res.status(200).send(arrayData)
   } catch (error) {
     console.log(error)
+    res.status(500).send('Server Error')
   }
 })
 
@@ -167,42 +137,123 @@ export const deleteAccount = asyncHandler(async (req, res) => {
   console.log('============Delete accountIds===========', accountIds)
 
   try {
-    // Delete multiple accounts with the provided account IDs from the MongoDB database
-    await Account.deleteMany({ _id: { $in: accountIds } })
+    // Find the accounts to be deleted from the database
+    const accountsToDelete = await Account.find({ _id: { $in: accountIds } })
 
-    res.status(200).send('Deleted Successfully!')
-  } catch (error) {
-    console.error('Error deleting accounts:', error)
-    res.sendStatus(500)
-  }
-})
-
-export const getAccountToReconcile = asyncHandler(async (req, res) => {
-  const { accountIds } = req.query
-  console.log('============Reconcile accountIds===========', req.query)
-
-  try {
-    const accounts = await Account.find({ _id: { $in: accountIds } }).select(
-      'file'
-    )
-
-    if (!accounts) {
-      res.status(404)
-      return new Error('Account(s) not found')
+    if (!accountsToDelete || accountsToDelete.length === 0) {
+      return res.status(404).json({ error: 'Accounts not found' })
     }
 
-    const selectedAccountsFiles = accounts.map((selectedAccountFile) => {
-      const selectedAccountData = selectedAccountFile.file
-      const jsonString = selectedAccountData.toString()
-      const arrayData = JSON.parse(jsonString)
-      return arrayData
+    // Delete the accounts from the database
+    await Account.deleteMany({ _id: { $in: accountIds } })
+
+    // Delete the associated files from Cloudinary
+    const publicIdsToDelete = accountsToDelete.map((account) => {
+      // Extract the public ID from the fileUrl
+      const cloudinaryPublicId = account.fileUrl.split('/').pop().split('.')[0]
+      return cloudinaryPublicId
     })
 
-    console.log(`=====ACCOUNT WITH ${accountIds} FETCHED SUCCESSFULLY=====`)
-    res.status(200).json(selectedAccountsFiles)
+    // Delete files from Cloudinary
+    cloudinary.api.delete_resources(publicIdsToDelete, (error, result) => {
+      if (error) {
+        console.error('Error deleting files from Cloudinary:', error)
+        return res
+          .status(500)
+          .json({ error: 'Error deleting files from Cloudinary' })
+      }
+
+      console.log('Files deleted from Cloudinary:', publicIdsToDelete)
+      res
+        .status(200)
+        .json({ message: 'Accounts and files deleted successfully' })
+    })
   } catch (error) {
-    console.log('>>>>>>>error<<<<<<<', error)
-    res.status(500)
-    throw new Error('Error fetching Account to Reconcile: ', error)
+    console.error('Error deleting accounts:', error)
+    res.status(500).json({ error: error.message })
   }
 })
+
+// Controller to handle multiple account IDs
+export const getAccountToReconcile = asyncHandler(async (req, res) => {
+  try {
+    const { accountIds } = req.query
+
+    // Array to store the processed data for all accounts
+    const processedAccountsData = []
+
+    // Loop through the array of account IDs
+    for (const accountId of accountIds) {
+      // Query the database to get the account details (including the file URL)
+      const account = await Account.findById(accountId).select('-reconciled')
+
+      if (!account || !account.fileUrl) {
+        // Handle case where account not found or file URL is missing
+        console.error(
+          `Account not found or file URL not provided for account with ID: ${accountId}`
+        )
+        continue // Skip to the next account
+      }
+
+      // Retrieve the file from Cloudinary using the file URL
+      const fileBuffer = await FileDownload(account.fileUrl)
+
+      // Process the file based on its extension
+      const processedData = await handleFileDownload(
+        fileBuffer,
+        account.fileUrl
+      )
+
+      // Add the processed data to the array
+      const { jsonData } = processedData
+      processedAccountsData.push({ accountId, jsonData })
+    }
+
+    // Respond with the processed data as the response
+    res.status(200).json(processedAccountsData)
+  } catch (error) {
+    console.error('Error processing accounts:', error)
+    res
+      .status(500)
+      .json({ error: 'An error occurred while processing accounts' })
+  }
+})
+
+// export const getAccountToReconcile = asyncHandler(async (req, res) => {})
+// const { accountIds } = req.query
+// console.log('============Reconcile accountIds===========', req.query)
+
+// try {
+//   const accounts = await Account.find({ _id: { $in: accountIds } }).select(
+//     'fileUrl'
+//   )
+
+//   if (!accounts) {
+//     res.status(404)
+//     return new Error('Account(s) not found')
+//   }
+//   console.log('----accounts----', accounts)
+
+//   // const fileBuffer = await FileDownload(accounts.fileUrl)
+
+//   console.log(`=====ACCOUNT WITH ${accountIds} FETCHED SUCCESSFULLY=====`)
+//   res.status(200).json(selectedAccounts)
+// } catch (error) {
+//   console.log('>>>>>>>error<<<<<<<', error)
+//   res.status(500)
+//   throw new Error('Error fetching Account to Reconcile: ', error)
+// }
+
+// const processedData = await handleFileDownload(fileBuffer, fileUrl)
+
+//     const { jsonData, totalCreditAmount, totalDebitAmount, dateRange } =
+//       processedData
+
+//     const selectedAccounts = accounts.map((selectedAccount) => {
+//       const selectedAccountData = selectedAccount.jsonData
+//       const jsonString = selectedAccountData.toString()
+//       console.log('----jsonString----', jsonString)
+//       const arrayData = JSON.parse(jsonString)
+//       console.log('----arrayData----', arrayData)
+//       return arrayData
+//     })
