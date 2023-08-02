@@ -21,7 +21,9 @@ cloudinary.config({
 
 app.use(bodyParser.json())
 app.use(bodyParser.urlencoded({ extended: true }))
-app.use(cors({ origin: 'https://reconx.netlify.app' }))
+app.use(
+  cors({ origin: ['http://localhost:5173', 'https://reconx.netlify.app'] })
+)
 app.use(
   '/api/accounts',
   multerMiddleware({ limits: 10 * 1024 * 1024 }).single('file'),
