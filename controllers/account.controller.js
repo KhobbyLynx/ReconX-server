@@ -306,8 +306,8 @@ export const updateReconciliationStatus = asyncHandler(async (req, res) => {
     }
 
     // Update the reconciliation status to true (if it's not already true)
-    if (!account.reconcile) {
-      account.reconcile = true
+    if (!account.reconciled) {
+      account.reconciled = true
       await account.save()
     }
 
