@@ -19,7 +19,7 @@ const formatDate = (inputDate) => {
   const day = date.getDate().toString().padStart(2, '0')
   const month = (date.getMonth() + 1).toString().padStart(2, '0')
   const year = date.getFullYear().toString()
-  console.log('DATE CONVERTOR', inputDate, `${day}/${month}/${year}`)
+  // console.log('DATE CONVERTOR', inputDate, `${day}/${month}/${year}`)
   return `${day}/${month}/${year}`
 }
 
@@ -47,6 +47,7 @@ const transformXLSXData = (originalData) => {
     } else {
       // If the first cell is not empty, add the current row to the transformed data
       transformedData.push(row)
+      console.log('<<<PROCESSING>>>', row)
 
       // Update firstDate and lastDate
       const postDate = new Date(row['postdate'])
@@ -117,7 +118,7 @@ const transformCSVData = (originalData) => {
     } else {
       // If the first cell is not empty, add the current row to the transformed data
       transformedData.push(row)
-
+      console.log('<<<PROCESSING>>>', row)
       // Update firstDate and lastDate
       const postDate = new Date(row['postdate'])
       if (!firstDate || postDate < firstDate) {

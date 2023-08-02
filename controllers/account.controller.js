@@ -4,6 +4,7 @@ import { FileDownload, handleFileDownload } from '../config/fileProcessor.js'
 import fs from 'fs'
 import { v2 as cloudinary } from 'cloudinary'
 import memoryCache from 'memory-cache'
+import mongoose from 'mongoose'
 
 export const createAccount = asyncHandler(async (req, res) => {
   try {
@@ -119,11 +120,12 @@ export const singleAccount = asyncHandler(async (req, res) => {
       dateRange,
     }
 
-    console.log(`=====ACCOUNT WITH ${arrayData} FETCHED SUCCESSFULLY=====`)
+    // console.log(`=====ACCOUNT WITH ${arrayData} FETCHED SUCCESSFULLY=====`)
 
     // Store the paginated data in the cache
     const cacheDuration = 60 * 60 * 1000 // 1 hour
     memoryCache.put(cacheKey, arrayData, cacheDuration)
+    console.log('=====CACHE DATA=====', cachedData)
 
     res.status(200).send(arrayData)
   } catch (error) {
@@ -174,26 +176,95 @@ export const deleteAccount = asyncHandler(async (req, res) => {
   }
 })
 
-// Controller to handle multiple account IDs
 export const getAccountToReconcile = asyncHandler(async (req, res) => {
   try {
-    const { accountIds } = req.query
+    const { id } = req.params
+    console.log('>>>Error ID<<<<<', id)
 
-    // Array to store the processed data for all accounts
+    // Check if the paginated data is already in the cache
+    const cacheKey = `reconcilationData_${id}`
+    const cachedData = memoryCache.get(cacheKey)
+
+    if (cachedData) {
+      console.log('=====ACCOUNT DATA FETCHED FROM CACHE=====', cachedData)
+      return res.status(200).send(cachedData) // Return the cached data and stop further execution
+    }
+
+    // If not in cache, fetch the data from the database
+    const account = await Account.findById({ _id: id })
+
+    // Check if the account exists and has a file associated with it
+    if (!account || !account.fileUrl) {
+      res.status(404)
+      throw new Error('Account not found or file URL not provided')
+    }
+
+    const { _id, name, number, bank, branch, fileUrl } = account
+
+    console.log('<<<<FileUrl>>>>>>>', fileUrl)
+
+    const fileBuffer = await FileDownload(fileUrl)
+
+    const processedData = await handleFileDownload(fileBuffer, fileUrl)
+    const { jsonData, totalCreditAmount, totalDebitAmount, dateRange } =
+      processedData
+
+    const arrayData = {
+      _id,
+      name,
+      number,
+      bank,
+      branch,
+      jsonData,
+      totalItems: jsonData.length,
+      totalDebitAmount,
+      totalCreditAmount,
+      dateRange,
+    }
+
+    const cacheDuration = 60 * 60 * 1000 // 1 hour
+    memoryCache.put(cacheKey, arrayData, cacheDuration)
+    console.log('=====CACHE DATA=====', cachedData)
+
+    res.status(200).send(arrayData)
+  } catch (error) {
+    console.log(error)
+    res.status(500)
+    throw new Error('Server Error')
+  }
+})
+
+export const getOtherAccounts = asyncHandler(async (req, res) => {
+  try {
+    let { accountIds } = req.query
+
     const processedAccountsData = []
+    console.log('>>>>ACCOUNTS ID>>>', accountIds)
 
     // Loop through the array of account IDs
-    for (const accountId of accountIds) {
-      // Query the database to get the account details (including the file URL)
-      const account = await Account.findById(accountId).select('-reconciled')
+    //   for (const accountId of accountIds) {
+    //     const cachedData = memoryCache.get(cacheKey)
 
-      if (!account || !account.fileUrl) {
-        // Handle case where account not found or file URL is missing
-        console.error(
-          `Account not found or file URL not provided for account with ID: ${accountId}`
-        )
-        continue // Skip to the next account
-      }
+    //     if (cachedData !== {}) {
+    //       console.log('=====OTHER ACCOUNT CACHE DATA=====', cachedData)
+    //       processedAccountsData.push({ accountId, processedData: cachedData })
+    //     } else {
+    //     // Query the database to get the account details (including the file URL)
+    //   }
+    // }
+
+    const accounts = await Account.find({ _id: { $in: accountIds } }).select(
+      'fileUrl'
+    )
+
+    if (!accounts) {
+      console.error(`Account not found }`)
+    }
+
+    console.log('<<<Accounts>>>>>', accounts)
+    for (const account of accounts) {
+      const accountId = account._id
+      const cacheKey = `reconcilationData_${accountId}`
 
       // Retrieve the file from Cloudinary using the file URL
       const fileBuffer = await FileDownload(account.fileUrl)
@@ -204,12 +275,16 @@ export const getAccountToReconcile = asyncHandler(async (req, res) => {
         account.fileUrl
       )
 
-      // Add the processed data to the array
-      const { jsonData } = processedData
-      processedAccountsData.push({ accountId, jsonData })
+      // Save processed data in the cache
+      const cacheDuration = 60 * 60 * 1000 // 1 hour
+      memoryCache.put(cacheKey, processedData, cacheDuration)
+
+      processedAccountsData.push({ accountId, processedData })
     }
 
     // Respond with the processed data as the response
+    console.log('>>>>PROCESSEDACCDATA>>>', processedAccountsData)
+
     res.status(200).json(processedAccountsData)
   } catch (error) {
     console.error('Error processing accounts:', error)
@@ -219,8 +294,96 @@ export const getAccountToReconcile = asyncHandler(async (req, res) => {
   }
 })
 
+export const updateReconciliationStatus = asyncHandler(async (req, res) => {
+  try {
+    const { accountId } = req.query // Get the accountId from the query parameters
+
+    // Find the account in the database by its ID
+    const account = await Account.findById(accountId)
+
+    if (!account) {
+      return res.status(404).json({ error: 'Account not found' })
+    }
+
+    // Update the reconciliation status to true (if it's not already true)
+    if (!account.reconcile) {
+      account.reconcile = true
+      await account.save()
+    }
+
+    res
+      .status(200)
+      .json({ message: 'Reconciliation status updated successfully', account })
+  } catch (error) {
+    console.error('Error updating reconciliation status:', error)
+    res.status(500).json({
+      error: 'An error occurred while updating the reconciliation status',
+    })
+  }
+})
+
+// Controller to handle multiple account IDs
+
+// export const getOtherAccounts = asyncHandler(async (req, res) => {
+//   try {
+//     const { accountIds } = req.query
+
+//     // Parse the query parameter as an array of ObjectIDs
+//     const parsedAccountIds = accountIds.map(
+//       (id) => new mongoose.Types.ObjectId(id)
+//     )
+
+//     const processedAccountsData = []
+//     console.log('>>>>ACCOUNTS ID>>>', accountIds)
+//     console.log('>>>>PROCESSEDACCDATA>>>', processedAccountsData)
+
+//     // Loop through the array of account IDs
+//     for (const accountId of parsedAccountIds) {
+//       const cacheKey = `reconcilationData_${accountId}`
+//       const cachedData = memoryCache.get(cacheKey)
+
+//       if (cachedData) {
+//         console.log('=====OTHER ACCOUNT CACHE DATA=====', cachedData)
+//         processedAccountsData.push({ accountId, processedData: cachedData })
+//       } else {
+//         // Query the database to get the account details (including the file URL)
+//         const account = await Account.findById(accountId)
+
+//         if (!account || !account.fileUrl) {
+//           console.error(
+//             `Account not found or file URL not provided for account with ID: ${accountId}`
+//           )
+//           continue // Skip to the next account
+//         }
+
+//         // Retrieve the file from Cloudinary using the file URL
+//         const fileBuffer = await FileDownload(account.fileUrl)
+
+//         // Process the file based on its extension
+//         const processedData = await handleFileDownload(
+//           fileBuffer,
+//           account.fileUrl
+//         )
+
+//         processedAccountsData.push({ accountId, processedData })
+
+//         const cacheDuration = 60 * 60 * 1000 // 1 hour
+//         memoryCache.put(cacheKey, processedData, cacheDuration)
+//       }
+//     }
+
+//     // Respond with the processed data as the response
+//     res.status(200).json(processedAccountsData)
+//   } catch (error) {
+//     console.error('Error processing accounts:', error)
+//     res
+//       .status(500)
+//       .json({ error: 'An error occurred while processing accounts' })
+//   }
+// })
+
 // export const getAccountToReconcile = asyncHandler(async (req, res) => {})
-// const { accountIds } = req.query
+// const { parsedAccountIds } = req.query
 // console.log('============Reconcile accountIds===========', req.query)
 
 // try {
